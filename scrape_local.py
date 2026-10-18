@@ -41,6 +41,7 @@ from enphase_common import (
     jwt_claims,
     load_config,
     log,
+    sample_seconds,
     self_test,
     solar_log_lock,
 )
@@ -108,7 +109,7 @@ def gateway_connected(client: HttpClient, host: str) -> bool:
 
 
 def select_host(client: HttpClient, hosts: list[str], previous: str | None) -> str:
-    """Prefer the wired address. Use WiFi when the wired address does not connect."""
+    """Use the primary address. Try the next address when the primary does not connect."""
     if len(hosts) == 1:
         return hosts[0]
     selected = choose_gateway(hosts, lambda host: gateway_connected(client, host))
@@ -116,9 +117,9 @@ def select_host(client: HttpClient, hosts: list[str], previous: str | None) -> s
         return selected
     if selected == hosts[0]:
         if previous is not None:
-            log(f"wired gateway {selected} connected")
+            log(f"primary gateway {selected} connected")
     else:
-        log(f"wired gateway {hosts[0]} did not connect; using {selected}")
+        log(f"primary gateway {hosts[0]} did not connect; using {selected}")
     return selected
 
 
@@ -351,9 +352,7 @@ def main() -> None:
         self_test()
         return
     cfg = load_config()
-    interval = args.interval
-    if interval is None:
-        interval = float(cfg.get("SAMPLE_SECONDS") or 30)
+    interval = args.interval if args.interval is not None else sample_seconds(cfg)
     if interval < 5:
         raise SystemExit("--interval must be at least 5 seconds")
     run(cfg, once=args.once, interval=interval)

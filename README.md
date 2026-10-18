@@ -22,11 +22,13 @@ Edit `secrets.env`. Single-quote any value that contains spaces or shell charact
 | Variable | Where to find it |
 | --- | --- |
 | `ENPHASE_EMAIL`, `ENPHASE_PASSWORD` | The Enlighten login for this system. |
-| `ENVOY_HOST` | The gateway address to try first. Use the wired DHCP reservation when the unit has both interfaces. |
-| `ENVOY_HOST_WIFI` | Optional. The gateway's other address, usually WiFi. Each sample tries `ENVOY_HOST` first. If that address does not connect within 5 seconds, the sample uses this one. The next sample tries the wired address again. |
+| `ENVOY_HOST` | The gateway's wired address. |
+| `ENVOY_HOST_WIFI` | Optional. The gateway's WiFi address. |
+| `ENVOY_PRIMARY` | Which address to poll first: `wired`, `wifi`, or one of those two addresses. Default `wired`. |
+| `ENVOY_SINGLE_HOST` | `true` polls only the primary address. `false` (the default) tries the other address when the primary does not connect within 5 seconds, then tries the primary again on the next sample. |
+| `SAMPLE_SECONDS` | Polling frequency in seconds. Default 30. Minimum 5. `--interval` overrides this for one run. |
 | `ENVOY_SERIAL` | The gateway serial. It is printed on the unit and in the Enlighten devices list. `https://GATEWAY/info` also shows it and does not need a token. |
 | `ENLIGHTEN_SYSTEM_ID` | The number in the Enlighten site URL, such as `https://enlighten.enphaseenergy.com/web/1234567`. |
-| `SAMPLE_SECONDS` | Seconds between local samples. Default 30. |
 
 `ENVOY_INSTALLER_PASSWORD` and `ENVOY_PASSWORD` are notes from the pre-token days (the installer password from the Enphase Installer Toolkit, and `envoy` / the last six digits of the serial). This scraper does not send them. Firmware 7 and newer reject those digest passwords for `production.json`.
 

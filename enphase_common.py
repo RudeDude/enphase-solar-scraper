@@ -71,14 +71,62 @@ def load_config(path: Path | None = None) -> dict[str, str]:
     return values
 
 
+def config_flag(cfg: dict[str, str], key: str, default: bool = False) -> bool:
+    """Read a true/false setting. Blank means `default`."""
+    raw = cfg.get(key)
+    if raw is None or not raw.strip():
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise SystemExit(f"{key} must be true or false, not {raw!r}")
+
+
+def sample_seconds(cfg: dict[str, str]) -> float:
+    """Seconds between local samples. `SAMPLE_SECONDS` defaults to 30."""
+    raw = (cfg.get("SAMPLE_SECONDS") or "30").strip()
+    try:
+        interval = float(raw)
+    except ValueError as exc:
+        raise SystemExit(f"SAMPLE_SECONDS must be a number of seconds, not {raw!r}") from exc
+    if interval < 5:
+        raise SystemExit("SAMPLE_SECONDS must be at least 5")
+    return interval
+
+
 def envoy_hosts(cfg: dict[str, str]) -> list[str]:
-    """Wired host first, then the optional WiFi host. Duplicates are dropped."""
-    hosts = []
-    for key in ("ENVOY_HOST", "ENVOY_HOST_WIFI"):
-        host = (cfg.get(key) or "").strip()
-        if host and host not in hosts:
-            hosts.append(host)
-    return hosts
+    """Primary gateway address, then the other address unless fallback is off.
+
+    `ENVOY_PRIMARY` is `wired`, `wifi`, or one of the two addresses.
+    `ENVOY_SINGLE_HOST` true keeps only the primary address.
+    """
+    wired = (cfg.get("ENVOY_HOST") or "").strip()
+    wifi = (cfg.get("ENVOY_HOST_WIFI") or "").strip()
+    if wifi == wired:
+        wifi = ""
+    if not wired:
+        raise SystemExit("secrets.env is missing ENVOY_HOST")
+    choice = (cfg.get("ENVOY_PRIMARY") or "wired").strip()
+    kind = choice.lower()
+    if kind in {"wired", "lan", "ethernet", "host"}:
+        primary, secondary = wired, wifi
+    elif kind in {"wifi", "wireless"}:
+        if not wifi:
+            raise SystemExit("ENVOY_PRIMARY=wifi requires ENVOY_HOST_WIFI")
+        primary, secondary = wifi, wired
+    elif choice == wired:
+        primary, secondary = wired, wifi
+    elif wifi and choice == wifi:
+        primary, secondary = wifi, wired
+    else:
+        raise SystemExit("ENVOY_PRIMARY must be wired, wifi, or one of the configured addresses")
+    if config_flag(cfg, "ENVOY_SINGLE_HOST", default=False):
+        return [primary]
+    if secondary and secondary != primary:
+        return [primary, secondary]
+    return [primary]
 
 
 def choose_gateway(hosts: list[str], probe) -> str:
@@ -86,7 +134,7 @@ def choose_gateway(hosts: list[str], probe) -> str:
 
     `probe(host)` is true when the gateway answered, including an HTTP error.
     A refused or timed-out connection is false. If none connect, return the
-    wired host so the caller reports that failure.
+    primary host so the caller reports that failure.
     """
     if not hosts:
         raise ValueError("no gateway hosts")
@@ -415,15 +463,33 @@ def self_test() -> None:
     assert "whTodayRaw" not in sane
     assert sane["wNow"] == 10
 
-    hosts = envoy_hosts(
-        {
-            "ENVOY_HOST": "10.0.0.1",
-            "ENVOY_HOST_WIFI": " 10.0.0.2 ",
-        }
-    )
+    both = {"ENVOY_HOST": "10.0.0.1", "ENVOY_HOST_WIFI": " 10.0.0.2 "}
+    hosts = envoy_hosts(both)
     assert hosts == ["10.0.0.1", "10.0.0.2"], hosts
     assert envoy_hosts({"ENVOY_HOST": "10.0.0.1", "ENVOY_HOST_WIFI": "10.0.0.1"}) == ["10.0.0.1"]
     assert envoy_hosts({"ENVOY_HOST": "10.0.0.1"}) == ["10.0.0.1"]
+    assert envoy_hosts({**both, "ENVOY_PRIMARY": "wifi"}) == ["10.0.0.2", "10.0.0.1"]
+    assert envoy_hosts({**both, "ENVOY_PRIMARY": "10.0.0.2"}) == ["10.0.0.2", "10.0.0.1"]
+    assert envoy_hosts({**both, "ENVOY_PRIMARY": "wifi", "ENVOY_SINGLE_HOST": "true"}) == ["10.0.0.2"]
+    assert envoy_hosts({**both, "ENVOY_SINGLE_HOST": "yes"}) == ["10.0.0.1"]
+    assert config_flag({"ENVOY_SINGLE_HOST": "0"}, "ENVOY_SINGLE_HOST") is False
+    assert sample_seconds({}) == 30
+    assert sample_seconds({"SAMPLE_SECONDS": "15"}) == 15
+    for bad in (
+        {**both, "ENVOY_PRIMARY": "nope"},
+        {**both, "ENVOY_SINGLE_HOST": "maybe"},
+        {"ENVOY_HOST": "10.0.0.1", "ENVOY_PRIMARY": "wifi"},
+        {"SAMPLE_SECONDS": "fast"},
+        {"SAMPLE_SECONDS": "1"},
+    ):
+        try:
+            if "SAMPLE_SECONDS" in bad and "ENVOY_HOST" not in bad:
+                sample_seconds(bad)
+            else:
+                envoy_hosts(bad)
+        except SystemExit:
+            continue
+        raise AssertionError(f"expected SystemExit for {bad}")
     assert choose_gateway(hosts, lambda host: host == "10.0.0.1") == "10.0.0.1"
     assert choose_gateway(hosts, lambda host: host == "10.0.0.2") == "10.0.0.2"
     assert choose_gateway(hosts, lambda _host: False) == "10.0.0.1"
