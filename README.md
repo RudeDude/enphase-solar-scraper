@@ -22,7 +22,8 @@ Edit `secrets.env`. Single-quote any value that contains spaces or shell charact
 | Variable | Where to find it |
 | --- | --- |
 | `ENPHASE_EMAIL`, `ENPHASE_PASSWORD` | The Enlighten login for this system. |
-| `ENVOY_HOST` | The gateway's LAN address (the DHCP reservation or the sticker). |
+| `ENVOY_HOST` | The gateway address to try first. Use the wired DHCP reservation when the unit has both interfaces. |
+| `ENVOY_HOST_WIFI` | Optional. The gateway's other address, usually WiFi. Each sample tries `ENVOY_HOST` first. If that address does not connect within 5 seconds, the sample uses this one. The next sample tries the wired address again. |
 | `ENVOY_SERIAL` | The gateway serial. It is printed on the unit and in the Enlighten devices list. `https://GATEWAY/info` also shows it and does not need a token. |
 | `ENLIGHTEN_SYSTEM_ID` | The number in the Enlighten site URL, such as `https://enlighten.enphaseenergy.com/web/1234567`. |
 | `SAMPLE_SECONDS` | Seconds between local samples. Default 30. |

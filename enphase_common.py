@@ -71,6 +71,31 @@ def load_config(path: Path | None = None) -> dict[str, str]:
     return values
 
 
+def envoy_hosts(cfg: dict[str, str]) -> list[str]:
+    """Wired host first, then the optional WiFi host. Duplicates are dropped."""
+    hosts = []
+    for key in ("ENVOY_HOST", "ENVOY_HOST_WIFI"):
+        host = (cfg.get(key) or "").strip()
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def choose_gateway(hosts: list[str], probe) -> str:
+    """Return the first host that accepts a connection.
+
+    `probe(host)` is true when the gateway answered, including an HTTP error.
+    A refused or timed-out connection is false. If none connect, return the
+    wired host so the caller reports that failure.
+    """
+    if not hosts:
+        raise ValueError("no gateway hosts")
+    for host in hosts:
+        if probe(host):
+            return host
+    return hosts[0]
+
+
 def data_root(cfg: dict[str, str]) -> Path:
     raw = Path(cfg.get("DATA_DIR") or "data")
     if not raw.is_absolute():
@@ -389,4 +414,17 @@ def self_test() -> None:
     assert sane["whToday"] == 40000
     assert "whTodayRaw" not in sane
     assert sane["wNow"] == 10
+
+    hosts = envoy_hosts(
+        {
+            "ENVOY_HOST": "10.0.0.1",
+            "ENVOY_HOST_WIFI": " 10.0.0.2 ",
+        }
+    )
+    assert hosts == ["10.0.0.1", "10.0.0.2"], hosts
+    assert envoy_hosts({"ENVOY_HOST": "10.0.0.1", "ENVOY_HOST_WIFI": "10.0.0.1"}) == ["10.0.0.1"]
+    assert envoy_hosts({"ENVOY_HOST": "10.0.0.1"}) == ["10.0.0.1"]
+    assert choose_gateway(hosts, lambda host: host == "10.0.0.1") == "10.0.0.1"
+    assert choose_gateway(hosts, lambda host: host == "10.0.0.2") == "10.0.0.2"
+    assert choose_gateway(hosts, lambda _host: False) == "10.0.0.1"
     print("enphase_common self-test ok")

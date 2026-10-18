@@ -35,7 +35,9 @@ from enphase_common import (
     TokenStore,
     apply_firmware_fix,
     brief_body,
+    choose_gateway,
     data_root,
+    envoy_hosts,
     jwt_claims,
     load_config,
     log,
@@ -48,6 +50,8 @@ SNAPSHOT_EVERY = 6 * 3600
 # Micros stop talking after sunset. Count one as reporting if it spoke during
 # this window, so the evening summary still shows the whole array.
 REPORTING_WINDOW = 16 * 3600
+# How long to wait while deciding that a gateway address is unreachable.
+CONNECT_TIMEOUT = 5
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +99,27 @@ def append_jsonl(path: Path, record: dict) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(record, separators=(",", ":")) + "\n")
         handle.flush()
+
+
+def gateway_connected(client: HttpClient, host: str) -> bool:
+    """True when the gateway answered. HTTP errors still count as a connection."""
+    status, _body = get_local(client, envoy_url(host, "/info"), token=None, timeout=CONNECT_TIMEOUT)
+    return status != 0
+
+
+def select_host(client: HttpClient, hosts: list[str], previous: str | None) -> str:
+    """Prefer the wired address. Use WiFi when the wired address does not connect."""
+    if len(hosts) == 1:
+        return hosts[0]
+    selected = choose_gateway(hosts, lambda host: gateway_connected(client, host))
+    if selected == previous:
+        return selected
+    if selected == hosts[0]:
+        if previous is not None:
+            log(f"wired gateway {selected} connected")
+    else:
+        log(f"wired gateway {hosts[0]} did not connect; using {selected}")
+    return selected
 
 
 def software_version(client: HttpClient, host: str) -> str:
@@ -195,12 +220,11 @@ def save_snapshots(client: HttpClient, host: str, token: str, root: Path) -> Non
 
 def write_sample(
     client: HttpClient,
-    cfg: dict[str, str],
     store: TokenStore,
     root: Path,
     inverter_summary: dict | None,
+    host: str,
 ) -> dict:
-    host = cfg["ENVOY_HOST"]
     token = store.ensure()
     prod_url = envoy_url(host, "/production.json?details=1")
     pdm_url = envoy_url(host, "/ivp/pdm/energy")
@@ -245,11 +269,13 @@ def run(cfg: dict[str, str], once: bool, interval: float) -> None:
     client = HttpClient()
     store = TokenStore(client, cfg)
     root = data_root(cfg)
-    host = cfg["ENVOY_HOST"]
+    hosts = envoy_hosts(cfg)
+    host = select_host(client, hosts, None)
     version = software_version(client, host)
     log(
-        f"local scrape host={host} serial={cfg['ENVOY_SERIAL']} "
-        f"software={version or 'unknown'} interval={interval}s data={root}"
+        f"local scrape hosts={','.join(hosts)} using={host} "
+        f"serial={cfg['ENVOY_SERIAL']} software={version or 'unknown'} "
+        f"interval={interval}s data={root}"
     )
     try:
         token = store.ensure()
@@ -272,6 +298,7 @@ def run(cfg: dict[str, str], once: bool, interval: float) -> None:
         started = time.monotonic()
         try:
             now = time.monotonic()
+            host = select_host(client, hosts, host)
             if now >= next_snapshot:
                 save_snapshots(client, host, store.ensure(), root)
                 next_snapshot = time.monotonic() + SNAPSHOT_EVERY
@@ -283,7 +310,7 @@ def run(cfg: dict[str, str], once: bool, interval: float) -> None:
                     f"{summary['producing']}/{summary['count']} producing "
                     f"{summary['watts']}W reporting={summary['reporting']}"
                 )
-            record = write_sample(client, cfg, store, root, summary)
+            record = write_sample(client, store, root, summary, host)
             taken += 1
             failures = 0
             log(
