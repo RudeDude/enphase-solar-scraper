@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Enlighten history catch-up
+
+[Timer]
+OnCalendar=*-*-* 21:30:00
+Persistent=true
+Unit=scrape-enlighten.service
+
+[Install]
+WantedBy=timers.target

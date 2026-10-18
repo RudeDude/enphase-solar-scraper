@@ -1,0 +1,9 @@
+data/
+my-session.txt
+.env
+private-unit-info.txt
+secrets.env
+secrets/
+__pycache__/
+*.pyc
+

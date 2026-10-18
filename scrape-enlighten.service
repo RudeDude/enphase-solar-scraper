@@ -1,0 +1,14 @@
+# Optional. Install with the timer only if you want a daily cloud catch-up:
+#   cp scrape-enlighten.service scrape-enlighten.timer ~/.config/systemd/user/
+# Edit the path if the clone is not ~/src/enphase-solar-scraper.
+[Unit]
+Description=Pull Enlighten cloud production history
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/enphase-solar-scraper
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=America/New_York
+ExecStart=/usr/bin/python3 %h/src/enphase-solar-scraper/scrape_enlighten.py

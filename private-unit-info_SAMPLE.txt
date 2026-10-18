@@ -1,0 +1,36 @@
+user: installer
+pass: mac? serial no?
+
+user: Envoy
+pass: mac? serial no?
+
+newer tp-link wifi + router DHCP reservation for "envoy" at XXXXX
+wired mac address XXXXXXXX
+
+WiFi mac XXXXXXX (IP XXXXXX)
+
+Cell modem
+  Carrier: AT&T
+  ICCID (Cell Number): XXXXXXX
+  IMSI (Subscriber ID): XXXXXX
+  Modem IMEI Number: XXXXX
+
+Envoy
+    Serial Number     XXXXX
+    Part Number       800-00555-r03
+    Software Version  R4.10.35 (6ed292)
+    Software Build Date    12 Nov, 2018 8:57 PM
+
+
+https://enlighten.enphaseenergy.com/pv/old_systems/XXXXX/reports
+https://enlighten.enphaseenergy.com/login
+Username: XXXXXX
+Password: XXXXX
+
+URL to get token with callback to the local enphase server for auth / cookie
+Same login info as the user/public facing array info page
+https://entrez.enphaseenergy.com/
+
+Select System search "Name - XXXXXX"
+Then you can "Select gateway: XXXXX" and click "create access token"
+

@@ -1,0 +1,20 @@
+# User service. Install with:
+#   cp scrape-solar-data.service ~/.config/systemd/user/
+# Edit the path if the clone is not ~/src/enphase-solar-scraper.
+# Set TZ to the zone the gateway reports in https://GATEWAY/home.json ("timezone").
+[Unit]
+Description=Scrape production data from the local Enphase gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/src/enphase-solar-scraper
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=America/New_York
+ExecStart=%h/src/enphase-solar-scraper/scrape-solar-data.sh
+Restart=on-failure
+RestartSec=15
+
+[Install]
+WantedBy=default.target
