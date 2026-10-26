@@ -39,8 +39,14 @@ Check the login with one sample, then print it:
 ```bash
 python3 scrape_local.py --self-test
 python3 scrape_local.py --once
+python3 scrape_local.py --debug --once
+python3 scrape_local.py --production-only --once
 ./stat-solar.sh
 ```
+
+`--debug` prints each gateway response on the console. The dump is not written to the data files or to the timestamped status log. Leave it off the systemd service, because that service's stdout is the journal.
+
+`--production-only` reads `production.json?details=1` and `/ivp/pdm/energy` on each sample. It skips the inverter list and the home, inventory, and meter snapshots. `/info` is still requested, without a token, to choose an address and to read the software version. The installed service does not pass this flag. Add `--production-only` to `ExecStart` in the user unit when that service should poll production only, then restart the user service. `scrape-solar-data.sh` forwards the extra argument.
 
 `secrets.env`, `secrets/`, and `data/` are gitignored. Keep them that way. `private-unit-info_SAMPLE.txt` is only a notepad for site details. The scripts do not read it.
 
@@ -66,10 +72,11 @@ Do not also install a system-wide unit that runs the same script or an older cop
 Useful commands:
 
 ```bash
-python3 scrape_local.py --once          # one sample
-python3 scrape_local.py --interval 30   # loop
-./stat-solar.sh                         # today's recent watts, latest sample, max
-./show-loop.sh                          # stat-solar.sh every 30 seconds
+python3 scrape_local.py --once                 # one sample
+python3 scrape_local.py --interval 30          # loop
+python3 scrape_local.py --production-only      # meter and daily energy only
+./stat-solar.sh                                # today's recent watts, latest sample, max
+./show-loop.sh                                 # stat-solar.sh every 30 seconds
 ```
 
 ## Data files
@@ -89,7 +96,7 @@ Fields the status script uses:
 
 On firmware D8.3.5433 the production meter copies lifetime energy into `whToday` and `whLastSevenDays`. When that happens the scraper keeps the raw numbers in `whTodayRaw` and `whLastSevenDaysRaw`, and sets `whToday` from the microinverters' `wattHoursToday` (`whTodaySource` is `pdm.pcu`). `wNow` still comes from the production meter. After sunset, `wNow` near 0 with line voltage still present is a real reading. The microinverters stop talking after dark. An inverter counts as reporting if it spoke in the last 16 hours, so the evening summary still shows the whole array.
 
-Every five minutes the scraper appends per-inverter readings to `data/YYYY/MM/inverters-YYYY-MM-DD.jsonl`. Every six hours it writes `data/snapshots/home-DATE.json`, `inventory-DATE.json`, and `meters-DATE.json`.
+Every five minutes the scraper appends per-inverter readings to `data/YYYY/MM/inverters-YYYY-MM-DD.jsonl`. Every six hours it writes `data/snapshots/home-DATE.json`, `inventory-DATE.json`, and `meters-DATE.json`. `--production-only` skips those requests. Each sample still includes the production meter and the `/ivp/pdm/energy` repair.
 
 `jq` reads the daily file directly:
 
@@ -124,7 +131,29 @@ While today is still being recorded, cloud rows stop at the latest local sample,
 
 - `production.json?details=1` — the production energy meter, every sample
 - `/ivp/pdm/energy` — microinverter watt-hours today, used to repair `whToday` on the affected firmware
-- `/api/v1/production/inverters` — every five minutes
-- `/home.json`, `/inventory.json`, `/ivp/meters` — every six hours
+- `/api/v1/production/inverters` — every five minutes, unless `--production-only` is set
+- `/home.json`, `/inventory.json`, `/ivp/meters` — every six hours, unless `--production-only` is set
+
+`/info` is requested to choose a gateway address and to read the software version. That response is not stored. `--production-only` still requests it.
 
 The gateway's HTTPS certificate is self-signed. Local requests skip certificate verification. Cloud requests use normal TLS.
+
+## References
+
+The local client is the Python standard library. These projects were the research for the token request and the gateway endpoints. This repository does not vendor their source.
+
+- [pyenphase/pyenphase](https://github.com/pyenphase/pyenphase) is the library behind the Home Assistant Enphase Envoy integration. The owner token here follows that flow: `POST https://enlighten.enphaseenergy.com/login/login.json`, then `POST https://entrez.enphaseenergy.com/tokens` with the session id, the gateway serial, and the Enlighten username. That project treats firmware 7.0.0 as the first release that requires a token (`AUTH_TOKEN_MIN_VERSION`). From firmware 8.3.5433 (`PRODUCTION_TOTAL_IS_NET_CONSUMPTION`) it also repairs a meter bug in which total-consumption lifetime energy and watts copy net consumption, by adding production back onto total consumption. On the D8.3.5433 gateway this scraper was written against, the production meter's `whToday` and `whLastSevenDays` copy `whLifetime`. The daily total is taken from `production.pcu.wattHoursToday` in `/ivp/pdm/energy`. `wNow` stays the production meter's value. Paths taken from that work include `/production.json?details=1`, `/api/v1/production/inverters`, `/home.json`, `/inventory.json`, and `/ivp/meters`.
+
+- [Matthew1471/Enphase-API](https://github.com/Matthew1471/Enphase-API) documents Enlighten cloud authentication and local gateway tokens. Its commissioned-gateway request posts to `https://entrez.enphaseenergy.com/entrez_tokens`. The token cached here comes from `POST /tokens`.
+
+- [csmcolo/Enphase-Envoy-JWT-Tools](https://github.com/csmcolo/Enphase-Envoy-JWT-Tools) is a shell script, `envoy_generate_token.sh`, that logs in with `login.json` and posts `{session_id, serial_num, username}` to `https://entrez.enphaseenergy.com/tokens`. That is the same token request this scraper sends.
+
+- [evilzenscientist/envoyAPI](https://github.com/evilzenscientist/envoyAPI) walks through the same login, `POST https://entrez.enphaseenergy.com/tokens`, and local bearer use in `GetEnphaseToken.py`.
+
+Firmware before 7 accepted HTTP digest. The `envoy` password was the last six digits of the serial, and the installer password came from the Enphase Installer Toolkit Android app. Firmware 7 and later require the owner token for `production.json`. This repository does not calculate those passwords. `secrets.env.sample` still lists the old names as unused notes.
+
+The 15-minute cloud archive was read from the Enlighten website while logged in: `lifetime_energy.json` and `daily_energy.json` under `https://enlighten.enphaseenergy.com/pv/systems/<id>/`. A request for `energy_lifetime.json` returns the website HTML. Monitoring API v4 needs a separate developer key. This project uses the website session for that archive.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 Don J. Rude.

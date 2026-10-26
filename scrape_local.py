@@ -14,6 +14,8 @@ Usage:
   python3 scrape_local.py                 # loop every SAMPLE_SECONDS (default 30)
   python3 scrape_local.py --once          # one sample, then exit
   python3 scrape_local.py --interval 30
+  python3 scrape_local.py --debug --once  # print gateway payloads on the console
+  python3 scrape_local.py --production-only
   python3 scrape_local.py --self-test
 
 systemd: scrape-solar-data.service runs scrape-solar-data.sh, which holds a
@@ -25,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -53,14 +56,64 @@ SNAPSHOT_EVERY = 6 * 3600
 REPORTING_WINDOW = 16 * 3600
 # How long to wait while deciding that a gateway address is unreachable.
 CONNECT_TIMEOUT = 5
+# Set by --debug. Payloads are printed on the console and are not written to the status log.
+DEBUG = False
+_DEBUG_NOTICE = False
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Scrape the local Enphase gateway")
     parser.add_argument("--once", action="store_true", help="take one sample and exit")
     parser.add_argument("--interval", type=float, default=None, help="seconds between samples")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="print full gateway responses on the console, not in the status log or data files",
+    )
+    parser.add_argument(
+        "--production-only",
+        action="store_true",
+        help="query production.json and pdm energy only; skip inverters and snapshots",
+    )
     parser.add_argument("--self-test", action="store_true", help="run offline checks and exit")
     return parser.parse_args()
+
+
+def format_debug(name: str, payload) -> str:
+    if isinstance(payload, (dict, list)):
+        body = json.dumps(payload, indent=2)
+    elif isinstance(payload, bytes):
+        body = payload.decode("utf-8", "replace")
+    else:
+        body = str(payload)
+    return f"\n# {name}\n{body}"
+
+
+def debug_show(name: str, payload) -> None:
+    """Show one gateway response to the person at the terminal.
+
+    stdout under systemd is the journal, so a dump is not written there.
+    """
+    global _DEBUG_NOTICE
+    if not DEBUG:
+        return
+    close = False
+    if sys.stdout.isatty():
+        stream = sys.stdout
+    else:
+        try:
+            stream = open("/dev/tty", "w", encoding="utf-8")
+            close = True
+        except OSError:
+            if not _DEBUG_NOTICE:
+                log("debug output skipped; no console is attached")
+                _DEBUG_NOTICE = True
+            return
+    try:
+        print(format_debug(name, payload), file=stream, flush=True)
+    finally:
+        if close:
+            stream.close()
 
 
 def envoy_url(host: str, path: str) -> str:
@@ -161,6 +214,7 @@ def fetch_inverters(client: HttpClient, host: str, token: str, root: Path) -> di
     payload = parse_json(status, body, "inverters")
     if not isinstance(payload, list):
         raise RuntimeError("inverters response was not a list")
+    debug_show("/api/v1/production/inverters", payload)
     when = datetime.now()
     slim = [
         {
@@ -204,6 +258,7 @@ def save_snapshots(client: HttpClient, host: str, token: str, root: Path) -> Non
         except json.JSONDecodeError:
             log(f"snapshot {name} was not JSON")
             continue
+        debug_show(path, payload)
         save_json(folder / f"{name}-{stamp}.json", payload)
         if name == "inventory" and isinstance(payload, list):
             counts = [
@@ -252,6 +307,9 @@ def write_sample(
         log("pdm/energy returned 401; saving the meter sample without the daily-energy repair")
     elif not isinstance(pdm, dict):
         pdm = None
+    debug_show("/production.json?details=1", production)
+    if isinstance(pdm, dict):
+        debug_show("/ivp/pdm/energy", pdm)
 
     meter = pick_production_meter(production)
     if meter is None:
@@ -266,17 +324,18 @@ def write_sample(
     return record
 
 
-def run(cfg: dict[str, str], once: bool, interval: float) -> None:
+def run(cfg: dict[str, str], once: bool, interval: float, production_only: bool = False) -> None:
     client = HttpClient()
     store = TokenStore(client, cfg)
     root = data_root(cfg)
     hosts = envoy_hosts(cfg)
     host = select_host(client, hosts, None)
     version = software_version(client, host)
+    scope = " queries=production" if production_only else ""
     log(
         f"local scrape hosts={','.join(hosts)} using={host} "
         f"serial={cfg['ENVOY_SERIAL']} software={version or 'unknown'} "
-        f"interval={interval}s data={root}"
+        f"interval={interval}s{scope} data={root}"
     )
     try:
         token = store.ensure()
@@ -300,10 +359,16 @@ def run(cfg: dict[str, str], once: bool, interval: float) -> None:
         try:
             now = time.monotonic()
             host = select_host(client, hosts, host)
-            if now >= next_snapshot:
+            if DEBUG:
+                info_status, info_body = get_local(
+                    client, envoy_url(host, "/info"), token=None, timeout=10
+                )
+                if info_status == 200:
+                    debug_show("/info", info_body)
+            if not production_only and now >= next_snapshot:
                 save_snapshots(client, host, store.ensure(), root)
                 next_snapshot = time.monotonic() + SNAPSHOT_EVERY
-            if now >= next_inverters:
+            if not production_only and now >= next_inverters:
                 summary = fetch_inverters(client, host, store.ensure(), root)
                 next_inverters = time.monotonic() + INVERTER_EVERY
                 log(
@@ -347,15 +412,37 @@ def run(cfg: dict[str, str], once: bool, interval: float) -> None:
 
 
 def main() -> None:
+    global DEBUG
     args = parse_args()
     if args.self_test:
+        shown = format_debug("/production.json", {"wNow": 1.5})
+        assert shown.startswith("\n# /production.json\n"), shown
+        assert '"wNow": 1.5' in shown
+        assert DEBUG is False
+        saved_argv = sys.argv[:]
+        try:
+            sys.argv = ["scrape_local.py", "--production-only"]
+            flagged = parse_args()
+            sys.argv = ["scrape_local.py"]
+            plain = parse_args()
+        finally:
+            sys.argv = saved_argv
+        assert flagged.production_only is True
+        assert flagged.debug is False
+        assert plain.production_only is False
         self_test()
         return
+    DEBUG = args.debug
     cfg = load_config()
     interval = args.interval if args.interval is not None else sample_seconds(cfg)
     if interval < 5:
         raise SystemExit("--interval must be at least 5 seconds")
-    run(cfg, once=args.once, interval=interval)
+    run(
+        cfg,
+        once=args.once,
+        interval=interval,
+        production_only=args.production_only,
+    )
 
 
 if __name__ == "__main__":
