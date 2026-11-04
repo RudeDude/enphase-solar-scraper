@@ -138,6 +138,27 @@ While today is still being recorded, cloud rows stop at the latest local sample,
 
 The gateway's HTTPS certificate is self-signed. Local requests skip certificate verification. Cloud requests use normal TLS.
 
+## Panel alerts
+
+`alert_panels.py` watches the five-minute inverter file. It mails when some panels stay offline while others are producing. A dark array is not an alert: night, heavy cloud, and snow on every panel all report 0 W.
+
+A panel starts the clock the first time at least one other panel is producing and this one is at 0 W, missing, or still showing yesterday's watts. The clock keeps running through the night. It resets when the panel produces again. The mail waits `ALERT_TIMEOUT_HOURS` (default 48) so snow piled on part of the array for a couple of days does not alert on the first morning. While it is still down, a reminder goes out every `ALERT_REPEAT_HOURS` (default 24). When it produces again, a short recovery mail goes out.
+
+Inventory status is included when that snapshot was taken while the panels were communicating. `dc-pwr-low`, low DC voltage, and the asleep flag `obs_strs.failure` are normal in shade and after dark. Any other status that stays set for the same timeout is a fault, even if the panel is still making a few watts.
+
+Blank `ALERT_EMAIL` sends to `ENPHASE_EMAIL`. `ALERT_EMAIL='off'` writes the journal line and `data/alerts/panel-alerts.log` only. The suspect clock is `secrets/panel-alert.json`, which stays out of git. `--production-only` on the scraper skips inverter samples, so this check has nothing to read.
+
+```bash
+python3 alert_panels.py --self-test
+python3 alert_panels.py --dry-run
+mkdir -p ~/.config/systemd/user
+cp alert-panels.service alert-panels.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now alert-panels.timer
+```
+
+The timer runs every 15 minutes. The scraper service does not need a restart.
+
 ## References
 
 The local client is the Python standard library. These projects were the research for the token request and the gateway endpoints. This repository does not vendor their source.

@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Enphase panels for a persistent outage
+
+[Timer]
+OnCalendar=*-*-* *:0/15:00
+Persistent=true
+Unit=alert-panels.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,16 @@
+# User timer companion. Install with:
+#   cp alert-panels.service alert-panels.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now alert-panels.timer
+# Edit the path if the clone is not ~/src/enphase-solar-scraper.
+# This reads inverter samples. Leave --production-only off the scraper.
+[Unit]
+Description=Alert when some Enphase panels stay offline
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/src/enphase-solar-scraper
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=America/New_York
+ExecStart=/usr/bin/python3 %h/src/enphase-solar-scraper/alert_panels.py
