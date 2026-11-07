@@ -19,6 +19,7 @@ Usage:
   python3 decimate_solar.py             # rewrite; later calls look back 48 hours
   python3 decimate_solar.py --all       # scan the whole archive again
   python3 decimate_solar.py --hours 48
+  python3 decimate_solar.py --quiet     # crontab: print only when a file fails
   python3 decimate_solar.py --self-test
 """
 
@@ -56,8 +57,19 @@ def parse_args() -> argparse.Namespace:
         help=f"look back this many hours instead of {LOOKBACK_HOURS} (or the whole archive on a first run)",
     )
     parser.add_argument("--dry-run", action="store_true", help="report changes without rewriting files")
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="print nothing when every file is readable; still print file errors",
+    )
     parser.add_argument("--self-test", action="store_true", help="run offline checks and exit")
     return parser.parse_args()
+
+
+def report(message: str, *, quiet: bool) -> None:
+    """Status line for a normal run. Errors go through log() instead."""
+    if not quiet:
+        log(message)
 
 
 def is_local_zero(row: dict) -> bool:
@@ -222,9 +234,12 @@ def run_decimate(root: Path, *, now: datetime, state: dict, args: argparse.Names
     start_day = None if start is None else start.date()
     files = solar_files(root, start_day, today)
     if start is None:
-        log(f"scanning {len(files)} solar-log files")
+        report(f"scanning {len(files)} solar-log files", quiet=args.quiet)
     else:
-        log(f"scanning {len(files)} solar-log files since {start_day.isoformat()}")
+        report(
+            f"scanning {len(files)} solar-log files since {start_day.isoformat()}",
+            quiet=args.quiet,
+        )
     updated = unchanged = unreadable = 0
     before = after = 0
     for _day, path in files:
@@ -241,9 +256,10 @@ def run_decimate(root: Path, *, now: datetime, state: dict, args: argparse.Names
         after += outcome["after"]
     removed = before - after
     mode = "dry run " if args.dry_run else ""
-    log(
+    report(
         f"{mode}decimate files={len(files)} updated={updated} unchanged={unchanged} "
-        f"unreadable={unreadable} rows={before} kept={after} removed={removed}"
+        f"unreadable={unreadable} rows={before} kept={after} removed={removed}",
+        quiet=args.quiet,
     )
     wrote = not args.dry_run and (updated or unchanged)
     return {
@@ -316,6 +332,50 @@ def self_test() -> None:
     else:
         raise AssertionError("zero hours should be rejected")
 
+    import tempfile
+
+    import merge_enlighten
+
+    messages: list[str] = []
+
+    def record(message: str) -> None:
+        messages.append(message)
+
+    global log
+    saved_log = log
+    saved_merge_log = merge_enlighten.log
+    log = record
+    merge_enlighten.log = record
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            month = root / "2020" / "03"
+            month.mkdir(parents=True)
+            good = month / "solar-log-2020-03-28.json"
+            good.write_text(json.dumps({"readingTime": 1, "wNow": 5}) + "\n", encoding="utf-8")
+            quiet_now = datetime(2026, 11, 6, 12, 0)
+            quiet_args = argparse.Namespace(all=True, hours=None, dry_run=True, quiet=True)
+            outcome = run_decimate(root, now=quiet_now, state={}, args=quiet_args)
+            assert outcome["unreadable"] == 0
+            assert outcome["files"] == 1
+            assert messages == []
+            quiet_args.quiet = False
+            outcome = run_decimate(root, now=quiet_now, state={}, args=quiet_args)
+            assert any(message.startswith("scanning ") for message in messages)
+            assert any("decimate files=" in message for message in messages)
+            messages.clear()
+            bad = month / "solar-log-2020-03-29.json"
+            bad.write_text("{", encoding="utf-8")
+            quiet_args.quiet = True
+            outcome = run_decimate(root, now=quiet_now, state={}, args=quiet_args)
+            assert outcome["unreadable"] == 1
+            assert any("2020-03-29" in message for message in messages)
+            assert not any(message.startswith("scanning ") for message in messages)
+            assert not any("decimate files=" in message for message in messages)
+    finally:
+        log = saved_log
+        merge_enlighten.log = saved_merge_log
+
     print("decimate_solar self-test ok")
 
 
@@ -330,6 +390,8 @@ def main() -> None:
     outcome = run_decimate(root, now=now, state=load_state(path), args=args)
     if outcome["save_state"]:
         save_state(path, now)
+    if outcome["unreadable"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

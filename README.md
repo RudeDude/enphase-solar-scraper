@@ -171,8 +171,11 @@ The first run reads every solar-log file. After `secrets/decimate-state.json` re
 python3 decimate_solar.py --self-test
 python3 decimate_solar.py --dry-run    # show the first full pass
 python3 decimate_solar.py              # rewrite, then later calls look back 48 hours
+python3 decimate_solar.py --quiet      # crontab: silent when every file is readable
 python3 decimate_solar.py --all        # scan the whole archive again
 ```
+
+`--quiet` skips the scan and summary lines. An unreadable file is still logged, and the process exits with status 1.
 
 ## References
 
