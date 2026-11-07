@@ -159,6 +159,21 @@ systemctl --user enable --now alert-panels.timer
 
 The timer runs every 15 minutes. The scraper service does not need a restart.
 
+## Thin overnight zeros
+
+`decimate_solar.py` shortens the solar-log files. Any sample with `wNow` above 0 stays. A run of local zeros that lasts at least 15 minutes, such as overnight or a blockage, keeps the first sample of each 15-minute block and the last sample of the run. The last line of an open day stays the newest reading, so `stat-solar.sh` still prints the live sample. A zero dip shorter than 15 minutes stays intact. Rows tagged `"source": "enlighten"` stay as well. They are already one per 15 minutes, and `merge_enlighten.py` rebuilds them from the cloud archive.
+
+Inverter logs and the six-hour snapshots are left alone.
+
+The first run reads every solar-log file. After `secrets/decimate-state.json` records that run, the next call reads the last 48 hours, or back through the previous run if that was longer ago. Today's rewrite holds the same lock the scraper uses while it appends.
+
+```bash
+python3 decimate_solar.py --self-test
+python3 decimate_solar.py --dry-run    # show the first full pass
+python3 decimate_solar.py              # rewrite, then later calls look back 48 hours
+python3 decimate_solar.py --all        # scan the whole archive again
+```
+
 ## References
 
 The local client is the Python standard library. These projects were the research for the token request and the gateway endpoints. This repository does not vendor their source.
